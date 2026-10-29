@@ -384,44 +384,91 @@ export class ProcessImporter {
             throw new ImportError(`Failed to get states definitions from work item type '${witStateEntry.workItemTypeRefName}' on target account, see logs for details.`)
         }
 
-        for (const sourceState of witStateEntry.states) {
-            try {
-                const existingStates: WITProcessDefinitionsInterfaces.WorkItemStateResultModel[] = targetWITStates.filter(targetState => sourceState.name === targetState.name);
-                if (existingStates.length === 0) {  // does not exist on target
-                    const createdState = await Engine.Task(
-                        () => this._witProcessDefinitionApi.createStateDefinition(Utility.toCreateOrUpdateStateDefinition(sourceState), payload.process.typeId, witStateEntry.workItemTypeRefName),
-                        `Create state '${sourceState.name}' in '${witStateEntry.workItemTypeRefName}' work item type`);
-                    if (!createdState || !createdState.id) {
-                        throw new ImportError(`Unable to create state '${sourceState.name}' in '${witStateEntry.workItemTypeRefName}' work item type, server returned empty result or id.`);
-                    }
-                }
-                else {
-                    if (sourceState.hidden) { // if state exists on target, only update if hidden 
-                        const hiddenState = await Engine.Task(
-                            () => this._witProcessDefinitionApi.hideStateDefinition({ hidden: true }, payload.process.typeId, witStateEntry.workItemTypeRefName, existingStates[0].id),
-                            `Hide state '${sourceState.name}' in '${witStateEntry.workItemTypeRefName}' work item type`);
-                        if (!hiddenState || hiddenState.name !== sourceState.name || !hiddenState.hidden) {
-                            throw new ImportError(`Unable to hide state '${sourceState.name}' in '${witStateEntry.workItemTypeRefName}' work item type, server returned empty result, id or state is not hidden.`);
-                        }
-                    }
+for (const sourceState of witStateEntry.states) {
+    try {
+        const existingStates: WITProcessDefinitionsInterfaces.WorkItemStateResultModel[] =
+            targetWITStates.filter(targetState => sourceState.name === targetState.name);
 
-                    const existingState = existingStates[0];
-                    if (sourceState.color !== existingState.color || sourceState.stateCategory !== existingState.stateCategory || sourceState.name !== existingState.name) {
-                        // Inherited state can be edited in custom work item types.
-                        const updatedState = await Engine.Task(
-                            () => this._witProcessDefinitionApi.updateStateDefinition(Utility.toCreateOrUpdateStateDefinition(sourceState), payload.process.typeId, witStateEntry.workItemTypeRefName, existingState.id),
-                            `Update state '${sourceState.name}' in '${witStateEntry.workItemTypeRefName}' work item type`);
-                        if (!updatedState || updatedState.name !== sourceState.name) {
-                            throw new ImportError(`Unable to update state '${sourceState.name}' in '${witStateEntry.workItemTypeRefName}' work item type, server returned empty result, id or state is not hidden.`);
-                        }
-                    }
-                }
-            }
-            catch (error) {
-                Utility.handleKnownError(error);
-                throw new ImportError(`Unable to create/hide/update state '${sourceState.name}' in '${witStateEntry.workItemTypeRefName}' work item type, see logs for details`);
+        if (existingStates.length === 0) {  // does not exist on target
+            const createdState = await Engine.Task(
+                () => this._witProcessDefinitionApi.createStateDefinition(
+                    Utility.toCreateOrUpdateStateDefinition(sourceState),
+                    payload.process.typeId,
+                    witStateEntry.workItemTypeRefName
+                ),
+                `Create state '${sourceState.name}' in '${witStateEntry.workItemTypeRefName}' work item type`
+            );
+
+            if (!createdState || !createdState.id) {
+                throw new ImportError(
+                    `Unable to create state '${sourceState.name}' in '${witStateEntry.workItemTypeRefName}' work item type, server returned empty result or id.`
+                );
             }
         }
+        else {
+            if (sourceState.hidden) { // if state exists on target, only update if hidden
+                const hiddenState = await Engine.Task(
+                    () => this._witProcessDefinitionApi.hideStateDefinition(
+                        { hidden: true },
+                        payload.process.typeId,
+                        witStateEntry.workItemTypeRefName,
+                        existingStates[0].id
+                    ),
+                    `Hide state '${sourceState.name}' in '${witStateEntry.workItemTypeRefName}' work item type`
+                );
+
+                if (!hiddenState || hiddenState.name !== sourceState.name || !hiddenState.hidden) {
+                    throw new ImportError(
+                        `Unable to hide state '${sourceState.name}' in '${witStateEntry.workItemTypeRefName}' work item type, server returned empty result, id or state is not hidden.`
+                    );
+                }
+            }
+
+            const existingState = existingStates[0];
+
+            if (
+                sourceState.color !== existingState.color ||
+                sourceState.stateCategory !== existingState.stateCategory ||
+                sourceState.name !== existingState.name
+            ) {
+                // Azure DevOps does not support updating states in the Completed
+                // category through this API.
+                if (
+                    sourceState.stateCategory &&
+                    sourceState.stateCategory.toLowerCase() === "completed"
+                ) {
+                    logger.logWarning(
+                        `Skipping state '${sourceState.name}' because Azure DevOps does not support updating the Completed category through this API.`
+                    );
+                    continue;
+                }
+
+                // Inherited state can be edited in custom work item types.
+                const updatedState = await Engine.Task(
+                    () => this._witProcessDefinitionApi.updateStateDefinition(
+                        Utility.toCreateOrUpdateStateDefinition(sourceState),
+                        payload.process.typeId,
+                        witStateEntry.workItemTypeRefName,
+                        existingState.id
+                    ),
+                    `Update state '${sourceState.name}' in '${witStateEntry.workItemTypeRefName}' work item type`
+                );
+
+                if (!updatedState || updatedState.name !== sourceState.name) {
+                    throw new ImportError(
+                        `Unable to update state '${sourceState.name}' in '${witStateEntry.workItemTypeRefName}' work item type, server returned empty result, id or state is not hidden.`
+                    );
+                }
+            }
+        }
+    }
+    catch (error) {
+        Utility.handleKnownError(error);
+        throw new ImportError(
+            `Unable to create/hide/update state '${sourceState.name}' in '${witStateEntry.workItemTypeRefName}' work item type, see logs for details`
+        );
+    }
+}
 
         for (const targetState of targetWITStates) {
             const sourceStateMatchingTarget: WITProcessDefinitionsInterfaces.WorkItemStateResultModel[] = witStateEntry.states.filter(sourceState => sourceState.name === targetState.name);
